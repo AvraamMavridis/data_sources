@@ -1,0 +1,153 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+
+  <title>The HTML5 Herald</title>
+  <meta name="description" content="The HTML5 Herald">
+  <meta name="author" content="SitePoint">
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@1.0.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.15/lodash.min.js" integrity="sha256-VeNaFBVDhoX3H+gJ37DpT/nTuZTdjYro9yBruHjVmoQ=" crossorigin="anonymous"></script>
+
+  <script>
+
+    function normalize(odd, max) {
+      const home = odd['AvgHomeOdd'];
+      const away = odd['AvgAwayOdd'];
+      const draw = odd['AvgDrawOdd'];
+
+      const sum = home + draw + away;
+      return {
+        ...odd,
+        totalGoals: (odd.HomeGoals + odd.AwayGoals) / max,
+        home: ((home)/sum),
+        away: ((away)/sum),
+        draw: ((draw)/sum),
+      }
+    }
+
+    function denormalizeOutput(res, max) {
+      return res * max;
+    }
+
+    function resultMapping(arr){
+      const max = Math.max(...arr);
+      const index = arr.findIndex(v => v === max);
+
+      if(index === 0) return 'H';
+      if(index === 1) return 'D';
+      if(index === 2) return 'A';
+    }
+
+    function createModel() {
+      const model = tf.sequential();
+
+      model.add(tf.layers.dense({
+        activation: 'linear',
+        inputShape: [33],
+        units: 4,
+      }));
+
+      model.add(tf.layers.dense({
+        activation: 'linear',
+        inputShape: [4],
+        units:  1,
+      }));
+
+      const optimizer = tf.train.sgd(0.1);
+
+      model.compile({
+        optimizer,
+        loss: 'meanSquaredError'
+      })
+
+      return model;
+    }
+
+    function trainModel(model, trainingFeatureTensor, trainingLabelTensor) {
+
+      const { onBatchEnd, onEpochEnd } = tfvis.show.fitCallbacks({
+        name: 'Training Performance',
+      }, ['loss',  'acc'])
+
+      return model.fit(trainingFeatureTensor, trainingLabelTensor, {
+        epochs: 250,
+        callbacks: {
+          onEpochEnd
+        },
+        metrics: ['accuracy']
+      });
+
+      return model;
+    }
+
+
+    async function run() {
+      const dataUrl = "http://localhost:8080/TrainingSet.csv";
+      const csvDataset = tf.data.csv(dataUrl);
+      const dataSet = csvDataset;
+
+      const dataUrl2 = "http://localhost:8080/ExpectedSet.csv";
+      const predictionSet = tf.data.csv(dataUrl2);
+
+      let trainData = await dataSet.toArray()
+      tf.util.shuffle(trainData);
+
+      const totalGoals = trainData.map(d => d.HomeGoals + d.AwayGoals);
+      const min = Math.min(...totalGoals);
+      const max = Math.max(...totalGoals);
+
+      trainData = trainData.map(d => normalize(d, max));
+
+      const teams = _.uniq(trainData.map(d => d.HomeTeam));
+      let testData = await predictionSet.toArray();
+
+      const trainTensor = tf.tensor2d(trainData.map(d => [
+        ...teams.map(t => d.HomeTeam === t),
+        ...teams.map(t => d.AwayTeam === t),
+        d.home,
+        d.draw, 
+        d.away,
+        d['Over2.5'],
+        d['Under2.5'],
+      ]));
+
+      const outputTensor = tf.tensor2d(trainData.map(d => [
+        d.HomeGoals + d.AwayGoals > 2.5,
+      ]))
+
+      const testTensor = tf.tensor2d(testData.map(d => [
+        ...teams.map(t => d.HomeTeam === t),
+        ...teams.map(t => d.AwayTeam === t),
+        d.home, d.draw, d.away,
+        d['Over2.5'],
+        d['Under2.5'],
+      ]));
+
+      // // Create model
+      const model = createModel();
+      model.summary();
+
+      const result = await trainModel(model, trainTensor, outputTensor);
+      const predictResults = model.predict(testTensor).arraySync();
+
+      predictResults.map((res, i) => {
+        console.table(
+        {
+          ...testData[i],
+          result: res
+        });
+      })
+    }
+
+    run();
+  </script>
+</head>
+
+<body>
+</body>
+
+</html
